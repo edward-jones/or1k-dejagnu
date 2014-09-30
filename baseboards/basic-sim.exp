@@ -44,6 +44,7 @@ proc find_sim { target_alias sim_dir sim_name } {
     if { $try != "" } {
 	return $try
     }
+
     return ${target_alias}-${sim_name}
 }
 

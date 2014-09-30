@@ -344,20 +344,20 @@ proc remote_raw_binary { host } {
 }
 
 
-
 proc remote_reboot { host } {
-    clone_output "\nRebooting ${host}\n"
+    #clone_output "\nRebooting ${host}\n"
     # FIXME: don't close the host connection, or all the remote
     # procedures will fail.
     # remote_close $host
-    set status [call_remote "" reboot "$host"]
-    if {[board_info $host exists name]} {
-	set host [board_info $host name]
-    }
-    if { [info proc ${host}_init] != "" } {
-	${host}_init $host
-    }
-    return $status
+    
+    #set status [call_remote "" reboot "$host"]
+    #if {[board_info $host exists name]} {
+    #  	set host [board_info $host name]
+    #}
+    #if { [info proc ${host}_init] != "" } {
+    #	${host}_init $host
+    #}
+    #return $status
 }
 
 proc standard_reboot { host } {
