@@ -41,7 +41,8 @@ pkgdata_SCRIPTS = \
   lib/debugger.exp lib/dejagnu.exp lib/dg.exp lib/framework.exp \
   lib/ftp.exp lib/kermit.exp lib/libgloss.exp lib/remote.exp \
   lib/rlogin.exp lib/rsh.exp lib/standard.exp lib/target.exp \
-  lib/targetdb.exp lib/telnet.exp lib/tip.exp lib/utils.exp
+  lib/targetdb.exp lib/telnet.exp lib/tip.exp lib/utils.exp \
+  lib/override.exp
 
 configdir = $(pkgdatadir)/config
 config_DATA = config/README

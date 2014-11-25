@@ -154,6 +154,11 @@
 # Global state variables.
 # The defaults are for GCC.
 
+
+# Handles the override of the default expected result of tests
+load_lib override.exp
+
+
 # The default do-what keyword.
 set dg-do-what-default compile
 
@@ -560,6 +565,7 @@ proc dg-final { args } {
 # It must be run before calling `dg-test'.
 #
 proc dg-init { } {
+    init_override_script
 }
 
 # dg-runtest -- simple main loop useful to most testsuites
@@ -649,10 +655,35 @@ proc dg-test { args } {
 	set name "[file tail [file dirname $prog]]/[file tail $prog]"
     }
 
+    # copy of name, since later it has the tool flags appended to it
+    set base_name $name
+
+
+    # query the override script
+    set test_action [query_override_script $base_name $tool_flags GENERAL 0]
+
+    # Retrieve the script results, check whether we should run this test
+    set override 0 
+    set override_pass 0
+    set override_xfail 0
+    set override_unsupported 0
+
+    if { $test_action != 0 } {
+        set override 1
+    }
+    if { $test_action == 1 } {
+        set override_pass 1
+    } elseif { $test_action == 2 } {
+        set override_xfail 1
+    } elseif { $test_action == 3 } {
+        set override_unsupported 1
+    }
+
+
     # We append the compilation flags, if any, to ensure that the test case
     # names are unique.
     if { "$tool_flags" != "" } {
-	set name "$name $tool_flags"
+	set name "$base_name $tool_flags"
     }
 
     # Process any embedded dg options in the testcase.
@@ -705,10 +736,16 @@ proc dg-test { args } {
     }
 
     # If we're not supposed to try this test on this target, we're done.
-    if { [lindex ${dg-do-what} 1] == "N" } {
+	set do_test [lindex ${dg-do-what} 1]    
+	if { ($do_test == "N" && $override == 0) || $override_unsupported == 1 } {
 	unsupported "$name"
 	verbose "$name not supported on this target, skipping it" 3
 	return
+    }
+
+    # Test is overridden as expected to fail
+    if { $override_xfail == 1 } {
+        setup_xfail "*-*-*"
     }
 
     # Run the tool and analyze the results.
@@ -749,7 +786,40 @@ proc dg-test { args } {
 	# $line will either be a formatted line number or a number all by
 	# itself.  Delete the formatting.
 	scan $line ${dg-linenum-format} line
-	switch [lindex $i 1] {
+
+    set the_error [lindex $i 1]
+    set test_type [string trimleft $the_error X]
+    verbose "subtest ${line} ${the_error}"
+
+
+    # pass the subtest error/line to the external script to check if it has
+    # been overridden. The script should not return UNSUPPORTED for a subtest
+    set test_action [query_override_script $base_name $tool_flags $test_type $line]
+
+    set sub_override 0
+    set sub_override_pass 0
+    set sub_override_xfail 0
+    set sub_override_unsupported 0
+
+    if { $test_action != 0 } {
+        set sub_override 1
+    }
+    if { $test_action == 1 } {
+        set sub_override_pass 1
+    } elseif { $test_action = 2 } {
+        set sub_override_xfail 1
+    }
+
+    # set the error according to the overrides
+    if { $sub_override_xfail == 1 } {
+        set the_error X$test_type
+    }
+    if { $sub_override_pass == 1 } {
+        set the_error $test_type
+    }
+
+
+    switch $the_error {
 	    "ERROR" {
 		$ok "$name $comment (test for errors, line $line)"
 	    }
@@ -818,6 +888,15 @@ proc dg-test { args } {
 	if {${dg-excess-errors-flag}} {
 	    setup_xfail "*-*-*"
 	}
+
+        # If there is an override to make it a pass, clear any xfail flag
+        # and unset global conditional data used by pass/fail
+        if { $override_pass == 1 } {
+            global compiler_conditional_xfail_data
+            unset  compiler_conditional_xfail_data
+            clear_xfail "*-*-*"
+        }
+
 	if {![string match "" $comp_output]} {
 	    fail "$name (test for excess errors)"
 	    send_log "Excess errors:\n$comp_output\n"
@@ -905,6 +984,9 @@ proc dg-test { args } {
 # This is called at the end to undo anything dg-init did (that needs undoing).
 #
 proc dg-finish { } {
+    # tidy up the global override script
+    finish_override_script
+
     # Reset this in case caller wonders whether s/he should.
     global prms_id
     set prms_id 0
