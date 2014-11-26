@@ -812,7 +812,7 @@ proc dg-test { args } {
     }
     if { $test_action == 1 } {
         set sub_override_pass 1
-    } elseif { $test_action = 2 } {
+    } elseif { $test_action == 2 } {
         set sub_override_xfail 1
     }
 

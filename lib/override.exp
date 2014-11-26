@@ -75,7 +75,7 @@ proc query_override_script { filename flags subtest line } {
     global spawn_id
 
     if { $override_manifest == "" } {
-        return
+        return 0
     }
 
     if {[info exists spawn_id]} {
@@ -84,6 +84,8 @@ proc query_override_script { filename flags subtest line } {
         set saved_sid $override_sid
     }
     set spawn_id $override_sid
+
+    set action 0
 
     send "$filename $flags $subtest $line\n"
     expect {
