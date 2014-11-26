@@ -32,10 +32,15 @@ set saved_sid 0
 # test manifest and check if a given test has been overridden. This must be
 # called before any other proc may be used.
 proc init_override_script { } {
+    global override_manifest
     global override_sid
     global override_pid
 
-    set override_pid [spawn override_test.py manifest]
+    if { $override_manifest == "" } {
+        return
+    }
+
+    set override_pid [spawn override_test.py $override_manifest]
     set override_sid $spawn_id
     expect "READY"
 }
@@ -43,8 +48,13 @@ proc init_override_script { } {
 
 # Kill the process associated with the override script
 proc finish_override_script { } {
+    global override_manifest
     global override_sid
     global override_pid
+
+    if { $override_manifest == "" } {
+        return
+    }
 
     exec kill -12 $override_pid
     set override_sid 0
@@ -59,9 +69,14 @@ proc finish_override_script { } {
 # is for a test which should PASS, and 2 and 3 are for tests which are XFAIL
 # and UNSUPPORTED respectively.
 proc query_override_script { filename flags subtest line } {
+    global override_manifest
     global override_sid
     global override_pid
     global spawn_id
+
+    if { $override_manifest == "" } {
+        return
+    }
 
     if {[info exists spawn_id]} {
         set saved_sid $spawn_id
@@ -81,5 +96,11 @@ proc query_override_script { filename flags subtest line } {
     # recover the spawn_id that was active
     set spawn_id $saved_sid
     return $action
+}
+
+
+# Log that an override has taken place.
+proc override_log { message } {
+    send_user "OVERRIDE: ${message}\n"
 }
 

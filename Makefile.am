@@ -33,7 +33,7 @@ DISTCLEANFILES = xXx.log xXx.sum x.log x.sum testrun.log testrun.sum
 all-local:
 	@echo "Done. Now run 'make install'."
 
-bin_SCRIPTS = runtest
+bin_SCRIPTS = runtest lib/override_test.py
 include_HEADERS = dejagnu.h
 
 pkgdata_SCRIPTS = \

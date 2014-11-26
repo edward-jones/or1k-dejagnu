@@ -565,6 +565,7 @@ proc dg-final { args } {
 # It must be run before calling `dg-test'.
 #
 proc dg-init { } {
+    verbose "Initializing override script" 1
     init_override_script
 }
 
@@ -660,7 +661,7 @@ proc dg-test { args } {
 
 
     # query the override script
-    set test_action [query_override_script $base_name $tool_flags GENERAL 0]
+    set test_action [query_override_script $base_name $tool_flags COMPILE 0]
 
     # Retrieve the script results, check whether we should run this test
     set override 0 
@@ -737,15 +738,20 @@ proc dg-test { args } {
 
     # If we're not supposed to try this test on this target, we're done.
 	set do_test [lindex ${dg-do-what} 1]    
-	if { ($do_test == "N" && $override == 0) || $override_unsupported == 1 } {
-	unsupported "$name"
+    if { [lindex ${dg-do-what} 1] == "N" && $override == 0 } {
+        unsupported "$name"
 	verbose "$name not supported on this target, skipping it" 3
-	return
+    return
+    } elseif { $override_unsupported == 1 } {
+        unsupported "$name"
+        override_log "$name now unsupported, skipping it"
+        return
     }
 
     # Test is overridden as expected to fail
     if { $override_xfail == 1 } {
         setup_xfail "*-*-*"
+        override_log "$name now expected to fail"
     }
 
     # Run the tool and analyze the results.
@@ -812,9 +818,11 @@ proc dg-test { args } {
 
     # set the error according to the overrides
     if { $sub_override_xfail == 1 } {
+        override_log "subtest ${line} ${the_error} now expected to fail"
         set the_error X$test_type
     }
     if { $sub_override_pass == 1 } {
+        override_log "subtest ${line} ${the_error} now expected to pass"
         set the_error $test_type
     }
 
@@ -892,6 +900,7 @@ proc dg-test { args } {
         # If there is an override to make it a pass, clear any xfail flag
         # and unset global conditional data used by pass/fail
         if { $override_pass == 1 } {
+            override_log "$name now expected to pass"
             global compiler_conditional_xfail_data
             unset  compiler_conditional_xfail_data
             clear_xfail "*-*-*"
@@ -905,6 +914,33 @@ proc dg-test { args } {
 	}
     }
 
+
+    # query the override script to see if the test should be executed
+    set test_action [query_override_script $base_name $tool_flags EXECUTE 0]
+
+    set exec_override 0 
+    set exec_override_pass 0
+    set exec_override_xfail 0
+    set exec_override_unsupported 0
+
+    if { $test_action != 0 } {
+        set exec_override 1
+    }
+    if { $test_action == 1 } {
+        set exec_override_pass 1
+    } elseif { $test_action == 2 } {
+        set exec_override_xfail 1
+    } elseif { $test_action == 3 } {
+        set exec_override_unsupported 1
+    }
+
+    # Early exit if the execution is marked as unsupported
+    if { $exec_override_unsupported } {
+        unsupported "$name execution test"
+        return
+    }
+
+
     # Run the executable image if asked to do so.
     # FIXME: This is the only place where we assume a standard meaning to
     # the `keyword' argument of dg-do.  This could be cleaned up.
@@ -917,9 +953,22 @@ proc dg-test { args } {
 	    set status [lindex $result 0]
 	    set output [lindex $result 1]
 	    #send_user "After exec, status: $status\n"
-	    if { [lindex ${dg-do-what} 2] == "F" } {
+	    if { [lindex ${dg-do-what} 2] == "F" || $exec_override_xfail == 1 } {
 		setup_xfail "*-*-*"
 	    }
+
+            # override xfail flags if necessary
+            if { $exec_override_xfail == 1 } {
+                override_log "$name execution test now expected to fail"
+                setup_xfail "*-*-*"
+            }
+            if { $exec_override_pass == 1 } {
+                override_log "$name execution test now expected to pass"
+                global compiler_conditional_xfail_data
+                unset  compiler_conditional_xfail_data
+                clear_xfail "*-*-*"
+            }
+
 	    if { "$status" == "pass" } {
 		pass "$name execution test"
 		verbose "Exec succeeded." 3
@@ -985,6 +1034,7 @@ proc dg-test { args } {
 #
 proc dg-finish { } {
     # tidy up the global override script
+    verbose "Cleaning up override script" 1
     finish_override_script
 
     # Reset this in case caller wonders whether s/he should.
