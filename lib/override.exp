@@ -29,20 +29,36 @@ set saved_sid 0
 
 
 # Initialize the override script, this then allows the testsuite to query the
-# test manifest and check if a given test has been overridden. This must be
-# called before any other proc may be used.
+# test manifest and check if a given test has been overridden.
 proc init_override_script { } {
     global override_manifest
     global override_sid
     global override_pid
 
+    # ignore if no manifest present
     if { $override_manifest == "" } {
-        return
+	return
     }
 
-    set override_pid [spawn override_test.py $override_manifest]
-    set override_sid $spawn_id
-    expect "READY"
+    # save active spawn_id
+    if { [info exists spawn_id] } {
+	set saved_sid $spawn_id
+    } else {
+	# default
+	set saved_sid 0
+    }
+    
+    # only spawn the override script if there is not already one
+    if { $override_sid == 0 } {
+	set override_pid [spawn override_test.py $override_manifest]
+	set override_sid $spawn_id
+	expect "READY"
+    }
+
+    # recover the old spawn_id
+    if { $saved_sid != 0 } {
+	set spawn_id $saved_sid
+    }
 }
 
 
@@ -52,51 +68,95 @@ proc finish_override_script { } {
     global override_sid
     global override_pid
 
+    # no manifest or override script present
     if { $override_manifest == "" } {
-        return
+	return
+    } elseif { $override_sid == 0 } {
+	return
     }
 
+    # kill the script process
     exec kill -12 $override_pid
+
     set override_sid 0
+}
+
+
+# Query the override script and then handle the override by setting/clearing
+# xfail, or by marking the test as unsupported.
+# Return 1 if the test is unsupported and therefore should not be run.
+proc handle_override { log_str testcase flags subtest line_num } {
+    global compiler_conditional_xfail_data
+    
+    set test_override [query_override_script $testcase $flags $subtest $line_num]
+    switch $test_override {
+	"PASS" {
+	    override_log "$log_str now expected to pass"
+	    unset compiler_conditional_xfail_data
+	    clear_xfail "*-*-*"
+	}
+	"XFAIL" {
+	    override_log "$log_str now expected to fail"
+	    setup_xfail "*-*-*"
+	}
+	"UNSUPPORTED" {
+	    override_log "$log_str now unsupported, skipping it"
+	    unsupported "$log_str"
+	    return 1
+	}
+	default { } # do nothing if it's absent
+    }
+    return 0
 }
 
 
 # Query the override script, this takes various parameters about the test or
 # subtest being run, and then consults the manifest to check whether the
-# test has been overridden.
+# test has been overridden. This will call init_override_script if the script
+# has not already been initialized
 #
-# A return of 0 signifies that the test does not appear in the manifest, 1
-# is for a test which should PASS, and 2 and 3 are for tests which are XFAIL
-# and UNSUPPORTED respectively.
-proc query_override_script { filename flags subtest line } {
+# The return is a string representing the override found in the manifest, or
+# "ABSENT" if there is no override
+proc query_override_script { filename flags subtest line_num } {
     global override_manifest
     global override_sid
     global override_pid
     global spawn_id
 
+    # ignore if no manifest
     if { $override_manifest == "" } {
-        return 0
+	return "ABSENT"
     }
 
-    if {[info exists spawn_id]} {
-        set saved_sid $spawn_id
-    } else {
-        set saved_sid $override_sid
+    # if manifest has not already been initialized, initialize it.
+    if { $override_sid == 0 } {
+	init_override_script
     }
+
+    # save the current spawn_id
+    if {[info exists spawn_id]} {
+	set saved_sid $spawn_id
+    } else {
+	set saved_sid 0
+    }
+
+    # send the query to the override script, for now we ignore any errors
+    # when querying
     set spawn_id $override_sid
 
-    set action 0
-
-    send "$filename $flags $subtest $line\n"
+    send "\[$filename\] \[$flags\] \[$subtest\] \[$line_num\]\n"
     expect {
-        "ABSENT"      { set action 0; }
-        "PASS"        { set action 1; }
-        "XFAIL"       { set action 2; }
-        "UNSUPPORTED" { set action 3; }
+	"ABSENT"      { set action "ABSENT" }
+	"PASS"        { set action "PASS"   }
+	"XFAIL"       { set action "XFAIL"  }
+	"UNSUPPORTED" { set action "UNSUPPORTED" }
+	"ERROR" { }
     }
 
-    # recover the spawn_id that was active
-    set spawn_id $saved_sid
+    # recover the spawn_id
+    if { $saved_sid != 0 } {
+	set spawn_id $saved_sid
+    }
     return $action
 }
 

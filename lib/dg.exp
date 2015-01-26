@@ -155,7 +155,7 @@
 # The defaults are for GCC.
 
 
-# Handles the override of the default expected result of tests
+# Provides the capability to globally override the expected result of tests
 load_lib override.exp
 
 
@@ -565,8 +565,6 @@ proc dg-final { args } {
 # It must be run before calling `dg-test'.
 #
 proc dg-init { } {
-    verbose "Initializing override script" 1
-    init_override_script
 }
 
 # dg-runtest -- simple main loop useful to most testsuites
@@ -617,6 +615,7 @@ proc dg-test { args } {
     global tool
     global srcdir		;# eg: /calvin/dje/build/gcc/./testsuite/
     global host_triplet target_triplet
+    global compiler_conditional_xfail_data
 
     set keep 0
     set i 0
@@ -656,30 +655,17 @@ proc dg-test { args } {
 	set name "[file tail [file dirname $prog]]/[file tail $prog]"
     }
 
-    # copy of name, since later it has the tool flags appended to it
+    # copy the test name, as later it has the tool flags appended to it
     set base_name $name
 
-
-    # query the override script
-    set test_action [query_override_script $base_name $tool_flags COMPILE 0]
-
-    # Retrieve the script results, check whether we should run this test
-    set override 0 
-    set override_pass 0
-    set override_xfail 0
+    # Do an early query against the override script to check whether this
+    # test file has been marked as unsupported
+    set test_override [query_override_script $base_name $tool_flags "compile" ""]
     set override_unsupported 0
 
-    if { $test_action != 0 } {
-        set override 1
+    if { $test_override == "UNSUPPORTED" } {
+	set override_unsupported 1
     }
-    if { $test_action == 1 } {
-        set override_pass 1
-    } elseif { $test_action == 2 } {
-        set override_xfail 1
-    } elseif { $test_action == 3 } {
-        set override_unsupported 1
-    }
-
 
     # We append the compilation flags, if any, to ensure that the test case
     # names are unique.
@@ -737,21 +723,15 @@ proc dg-test { args } {
     }
 
     # If we're not supposed to try this test on this target, we're done.
-	set do_test [lindex ${dg-do-what} 1]    
-    if { [lindex ${dg-do-what} 1] == "N" && $override == 0 } {
-        unsupported "$name"
+    set do_test [lindex ${dg-do-what} 1]    
+    if { [lindex ${dg-do-what} 1] == "N" } {
+	unsupported "$name"
 	verbose "$name not supported on this target, skipping it" 3
-    return
+	return
     } elseif { $override_unsupported == 1 } {
-        unsupported "$name"
-        override_log "$name now unsupported, skipping it"
-        return
-    }
-
-    # Test is overridden as expected to fail
-    if { $override_xfail == 1 } {
-        setup_xfail "*-*-*"
-        override_log "$name now expected to fail"
+	override_log "$name now unsupported, skipping it"
+	unsupported "$name"
+	return
     }
 
     # Run the tool and analyze the results.
@@ -798,63 +778,57 @@ proc dg-test { args } {
     verbose "subtest ${line} ${the_error}"
 
 
-    # pass the subtest error/line to the external script to check if it has
-    # been overridden. The script should not return UNSUPPORTED for a subtest
-    set test_action [query_override_script $base_name $tool_flags $test_type $line]
-
-    set sub_override 0
-    set sub_override_pass 0
-    set sub_override_xfail 0
-    set sub_override_unsupported 0
-
-    if { $test_action != 0 } {
-        set sub_override 1
-    }
-    if { $test_action == 1 } {
-        set sub_override_pass 1
-    } elseif { $test_action == 2 } {
-        set sub_override_xfail 1
-    }
-
-    # set the error according to the overrides
-    if { $sub_override_xfail == 1 } {
-        override_log "subtest ${line} ${the_error} now expected to fail"
-        set the_error X$test_type
-    }
-    if { $sub_override_pass == 1 } {
-        override_log "subtest ${line} ${the_error} now expected to pass"
-        set the_error $test_type
-    }
-
-
+    # string representing the subtest type to appear in the log
     switch $the_error {
-	    "ERROR" {
-		$ok "$name $comment (test for errors, line $line)"
-	    }
-	    "XERROR" {
-		x$ok "$name $comment (test for errors, line $line)"
-	    }
-	    "WARNING" {
-		$ok "$name $comment (test for warnings, line $line)"
-	    }
-	    "XWARNING" {
-		x$ok "$name $comment (test for warnings, line $line)"
-	    }
-	    "BOGUS" {
-		$uhoh "$name $comment (test for bogus messages, line $line)"
-	    }
-	    "XBOGUS" {
-		x$uhoh "$name $comment (test for bogus messages, line $line)"
-	    }
-	    "BUILD" {
-		$uhoh "$name $comment (test for build failure, line $line)"
-	    }
-	    "XBUILD" {
-		x$uhoh "$name $comment (test for build failure, line $line)"
-	    }
-	    "EXEC" { }
+	"ERROR" -
+	"XERROR" { set subtest_name "errors" }
+	"WARNING" -
+	"XWARNING" { set subtest_name "warnings" }
+	"BOGUS" -
+	"XBOGUS" { set subtest_name "bogus messages" }
+	"BUILD" -
+	"XBUILD" { set subtest_name "build failure" }
+	"EXEC" -
+	"XEXEC" { }
+    }
+
+    set subtest_log_str "$name $comment (test for $subtest_name, line $line)"
+
+    # pass the subtest error/line to the external script to check if it has
+    # been overridden. Handle override
+    set test_override [query_override_script $base_name $tool_flags $subtest_name $line]
+
+    switch $test_override {
+	"PASS" {
+	    override_log "$subtest_log_str now expected to pass"
+	    set the_error X$test_type
+	}
+	"XFAIL" {
+	    override_log "$subtest_log_str now expected to fail"
+	    set the_error $test_type
+	}
+	"UNSUPPORTED" {
+	    override_log "$subtest_log_str now unsupported"
+	    unsupported "$subtest_log_str"
+	}
+	default { }
+    }
+
+    if { $test_override != "UNSUPPORTED" } {
+	switch $the_error {
+	    "ERROR" -
+	    "WARNING" {   $ok "$subtest_log_str" }
+	    "XERROR" -
+	    "XWARNING" { x$ok "$subtest_log_str" }
+	    "BOGUS" -
+	    "BUILD" {   $uhoh "$subtest_log_str" }
+	    "XBOGUS" -
+	    "XBUILD" { x$uhoh "$subtest_log_str" }
+	    "EXEC" -
 	    "XEXEC" { }
 	}
+    }
+
 	#send_user "\nold_dejagnu.exp: comp_output2= :$comp_output:\n\n"
     }
     #send_user "\nold_dejagnu.exp: comp_output3 = :$comp_output:\n\n"
@@ -896,15 +870,11 @@ proc dg-test { args } {
 	if {${dg-excess-errors-flag}} {
 	    setup_xfail "*-*-*"
 	}
-
-        # If there is an override to make it a pass, clear any xfail flag
-        # and unset global conditional data used by pass/fail
-        if { $override_pass == 1 } {
-            override_log "$name now expected to pass"
-            global compiler_conditional_xfail_data
-            unset  compiler_conditional_xfail_data
-            clear_xfail "*-*-*"
-        }
+	
+	# Handle override of test for excess errors, early exit on unsupported
+	if { [handle_override "$name (test for excess errors)" $base_name $tool_flags "excess errors" ""] == 1 } {
+	    return
+	}
 
 	if {![string match "" $comp_output]} {
 	    fail "$name (test for excess errors)"
@@ -914,33 +884,6 @@ proc dg-test { args } {
 	}
     }
 
-
-    # query the override script to see if the test should be executed
-    set test_action [query_override_script $base_name $tool_flags EXECUTE 0]
-
-    set exec_override 0 
-    set exec_override_pass 0
-    set exec_override_xfail 0
-    set exec_override_unsupported 0
-
-    if { $test_action != 0 } {
-        set exec_override 1
-    }
-    if { $test_action == 1 } {
-        set exec_override_pass 1
-    } elseif { $test_action == 2 } {
-        set exec_override_xfail 1
-    } elseif { $test_action == 3 } {
-        set exec_override_unsupported 1
-    }
-
-    # Early exit if the execution is marked as unsupported
-    if { $exec_override_unsupported } {
-        unsupported "$name execution test"
-        return
-    }
-
-
     # Run the executable image if asked to do so.
     # FIXME: This is the only place where we assume a standard meaning to
     # the `keyword' argument of dg-do.  This could be cleaned up.
@@ -948,26 +891,19 @@ proc dg-test { args } {
 	if {![file exists $output_file]} {
 	    unresolved "$name compilation failed to produce executable"
 	} else {
+	    # handle override of execution test, early exit if unsupported
+	    if { [handle_override "$name execution" $base_name $tool_flags "execute" ""] == 1 } {
+		return
+	    }
+
 	    set status -1
 	    set result [${tool}_load $output_file]
 	    set status [lindex $result 0]
 	    set output [lindex $result 1]
 	    #send_user "After exec, status: $status\n"
-	    if { [lindex ${dg-do-what} 2] == "F" || $exec_override_xfail == 1 } {
+	    if { [lindex ${dg-do-what} 2] == "F" } {
 		setup_xfail "*-*-*"
 	    }
-
-            # override xfail flags if necessary
-            if { $exec_override_xfail == 1 } {
-                override_log "$name execution test now expected to fail"
-                setup_xfail "*-*-*"
-            }
-            if { $exec_override_pass == 1 } {
-                override_log "$name execution test now expected to pass"
-                global compiler_conditional_xfail_data
-                unset  compiler_conditional_xfail_data
-                clear_xfail "*-*-*"
-            }
 
 	    if { "$status" == "pass" } {
 		pass "$name execution test"
@@ -1033,10 +969,6 @@ proc dg-test { args } {
 # This is called at the end to undo anything dg-init did (that needs undoing).
 #
 proc dg-finish { } {
-    # tidy up the global override script
-    verbose "Cleaning up override script" 1
-    finish_override_script
-
     # Reset this in case caller wonders whether s/he should.
     global prms_id
     set prms_id 0

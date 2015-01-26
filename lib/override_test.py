@@ -1,156 +1,348 @@
 #!/usr/bin/env python2
 
-
 import sys
-import re
 
 
-if len(sys.argv) < 2:
-    print >> sys.stderr, "Error: No test manifest provided"
-    exit(-1)
-
-# read in the test manifest
-test_manifest = open(sys.argv[1], 'r')
-
-
-# constants defining the possible results returned when a test is queried
-# against the manifest.
+# possible results returned when a test is queried against the manifest
 ABSENT      = 'ABSENT'
 PASS        = 'PASS'
 XFAIL       = 'XFAIL'
-UNSUPPORTED = 'UNSUPPORTED' 
+UNSUPPORTED = 'UNSUPPORTED'
 
-# type of tests that may appear in a query or in the manifest
-COMPILE_TEST      = 0
-EXECUTE_TEST      = 1
-TEST_FOR_WARNINGS = 2
-TEST_FOR_ERRORS   = 3
-TEST_FOR_BOGUS    = 4
-
-
-# A test defined for line 0 actually means it may occur on any line
-ANY_LINE = 0
+# Values to represent 'wildcard' entries in the manifest for different
+# parameters
+WILDCARD_NAME    = ''
+WILDCARD_FLAGS   = ''
+WILDCARD_SUBTEST = ''
+WILDCARD_LINE    = ''
 
 
-# A dictionary to hold tests and their validity, read in from the manifest
-# Test validity can be defined at the file level, or for individual
-# combinations of flags and subtests.
-test_dict = {}
+def read_manifest(filename, manifest):
+    manifest_file = None
+    try:
+        manifest_file = open(filename, 'r')
+    except IOError:
+        print >> sys.stderr, "error: Could not open override manifest (", filename, ")"
+        return False
+        
+    success = True
 
-# Regular expression to match entries in the manifest
-test_regexp = re.compile(r'(PASS:|XFAIL:|UNSUPPORTED:) *(\S*) *([^\(]*)(\(test for ([\s\S]*), line ([0-9]*)\))?')
+    # iterate through every line in the file
+    for line in manifest_file:
+        orig_line = str(line)
+
+        # ignore comment fields and empty lines
+        if parse_comment(line):
+            continue
+        if not line.lstrip():
+            continue
+
+        # parse parameters
+        result, line = parse_result(line)
+        if not result:
+            success = False
+            break
+
+        test_name, line = parse_field(line, WILDCARD_NAME)
+        flags, line     = parse_field(line, WILDCARD_FLAGS)
+        subtest, line   = parse_field(line, WILDCARD_SUBTEST)
+        line_num, line  = parse_field(line, WILDCARD_LINE)
+
+        if (test_name is None) or (flags is None) or (subtest is None) or (line_num is None):
+            print >> sys.stderr, "warning: Failed to parse field of manifest entry (string: ", orig_line, ")"
+            success = False
+            continue
+
+        line = line.lstrip()
+        if line:
+            line = line.rstrip()
+            print >> sys.stderr, "warning: Unknown string at end of manifest entry (string: ", orig_line, ")"
+            success = False
+            continue 
+
+        # add the entry to the manifest
+        manifest[(test_name, flags, subtest, line_num)] = result
+
+    manifest_file.close()
+
+    if not success:
+        print >> sys.stderr, "error: failed to parse manifest entry"
+    return success
 
 
-# parse tests from the manifest
-for line in test_manifest:
-    result = re.match(test_regexp, line)
+def parse_comment(line):
+    line = line.lstrip()
+    if line:
+        return line[0] == '#'
+    else:
+        return False
 
-    # ignore lines which don't match
+
+def parse_result(line):
+    line = line.lstrip()
+    line = line.split(':', 1)
+    result = {
+        'PASS'        : PASS,
+        'XFAIL'       : XFAIL,
+        'UNSUPPORTED' : UNSUPPORTED
+    }.get(line[0], None)
+
     if not result:
-        continue
+        print >> sys.stderr, "error: Invalid expected result (", line[0], ")"
+        return None, None 
 
-    # extract the test details
-    test_type = {
-        'PASS:'       : PASS,
-        'XFAIL:'      : XFAIL,
-        'UNSUPPORTED:': UNSUPPORTED
-    }[result.group(1)]
-    test_file, flags_str, subtest, test_line = result.group(2, 3, 5, 6)
-
-    # remove description field from the flags and turn into a tuple
-    flags = filter(lambda x: x[0] == '-', filter(None, flags_str.split()))
-    flags = tuple(flags)
-
-    # check in the flag string to see if its an execution test
-    if 'execution test' in flags_str:
-        subtest = EXECUTE_TEST
+    if len(line) < 2:
+        return result, ''
     else:
-        # not an execution test, get the type of subtest
-        subtest = {
-            None            : COMPILE_TEST,
-            'warnings'      : TEST_FOR_WARNINGS,
-            'errors'        : TEST_FOR_ERRORS,
-            'bogus messages': TEST_FOR_BOGUS
-        }[subtest]
+        return result, line[1]
+
+
+def parse_field(line, default):
+    line = line.lstrip()
     
-    # if its a subtest, check whether it is for a specific line
-    if (subtest != COMPILE_TEST) and (subtest != EXECUTE_TEST):
-        if test_line:
-            test_line = int(test_line)
-    else:
-        test_line = ANY_LINE
-
-    # only add to the test dictionary if there isn't already an entry
-    new_test = (test_file, flags, subtest, test_line)
-    #if test_dict.get(new_test, None):
-    #    print "Error: Manifest contains two entries for ", new_test
-    #    exit(-1)
-    test_dict[new_test] = test_type
-
-print "READY"
-
-while True:
-    line = sys.stdin.readline()
+    # empty line, use default
     if not line:
-        break
+        return default, '' 
 
-    args = line.split()
+    # capture field
+    if not line[0] == '[':
+        print >> sys.stderr, 'warning: Missing start of field \'[\''
+        return None, line
+    else:
+        line = line[1:]
 
-    # Get the test that is being run
-    test_file = args[0]
-   
-    # Retrieve flags, subtest type and the subtest line
-    flags = tuple(args[1:-2])
-    subtest = {
-        'COMPILE' : COMPILE_TEST,
-        'EXECUTE' : EXECUTE_TEST,
-        'WARNING' : TEST_FOR_WARNINGS,
-        'ERROR'   : TEST_FOR_ERRORS,
-        'BOGUS'   : TEST_FOR_BOGUS
-    }[args[-2]]
-    test_line = int(args[-1])
+    field = ''
+    pos = 0
+    nesting = 1
+    in_string = False
+    while nesting > 0:
+        # exit if we run out of line prematurely
+        if pos >= len(line):
+            field = None
+            break
 
-    # Check if there is an entry for this specific test
-    if subtest != COMPILE_TEST and flags != () and test_line != 0:
-        result = test_dict.get((test_file, flags, subtest, test_line), None)
-        if result is not None:
-            print result
-            continue
+        # handle nested brackets if they're not escaped
+        if (pos > 0 and line[pos - 1] != '\\') or (pos == 0):
+            if line[pos] == '[':
+                nesting = nesting + 1
+            elif line[pos] == ']':
+                nesting = nesting - 1
+        
+        # ignore the final closing brace
+        if nesting > 0:
+            field = field + line[pos]
+        pos = pos + 1
+    line = line[pos:]
 
-    # This specific subtest on any line
-    if subtest != COMPILE_TEST and flags != ():
-        result = test_dict.get((test_file, flags, subtest, 0), None)
-        if result is not None:
-            print result
-            continue
+    if field is None:
+        print >> sys.stderr, 'warning: Missing end of field \']\''
+        return None, line
 
-    # This specfic subtest with any flags
-    if subtest != COMPILE_TEST and test_line != 0:
-        result = test_dict.get((test_file, (), subtest, test_line), None)
-        if result is not None:
-            print result
-            continue
+    #line = line.split(']', 1)
+    #if len(line) == 1:
+    #    print >> sys.stderr, 'warning: Missing end of field \']\''
+    #    return None, line[0]
+    #
+    #field = line[0]
+    #line  = line[1]
 
-    # On any line with any flags
-    if subtest != COMPILE_TEST:
-        result = test_dict.get((test_file, (), subtest, 0), None)
-        if result is not None:
-            print result
-            continue
+    # Replace runs of whitespace with a single space, and strip leading and
+    # trailing whitespace
+    field = field.strip()
+    field = ' '.join(field.split())
 
-    # Any entry with these flags
-    if flags != ():
-        result = test_dict.get((test_file, flags, COMPILE_TEST, 0), None)
-        if result is not None:
-            print result
-            continue
+    # empty field means use the default
+    if not field:
+        return default, line
+    return field, line
 
-    # Any entry with any flags
-    result = test_dict.get((test_file, (), COMPILE_TEST, 0), None)
-    if result is not None:
-        print result
-        continue
 
-    # No entry for this file
-    print ABSENT
+def query_manifest(line, manifest):
+    # parse all of the fields which may make up the query
+    test_name, line = parse_field(line, WILDCARD_NAME)
+    flags, line     = parse_field(line, WILDCARD_FLAGS)
+    subtest, line   = parse_field(line, WILDCARD_SUBTEST)
+    line_num, line  = parse_field(line, WILDCARD_LINE)
+
+    # If any of the fields are None then they failed to parse
+    if (test_name is None) or (flags is None) or (subtest is None) or (line_num is None):
+        print >> sys.stderr, 'error: Failed to parse one or more fields'
+        return ABSENT
+
+    print "QUERY: ", test_name, flags, subtest, line_num
+    
+    # Look for the most specific entry in the manifest which covers this test.
+    # The later parameters are considered less significant than the earlier
+
+    # entries for this specific test
+    res = manifest.get((test_name, flags, subtest, line_num), None)
+    if res:
+        return res
+
+    # entry for same flags and subtest, but on any line
+    res = manifest.get((test_name, flags, subtest, WILDCARD_LINE), None)
+    if res:
+        return res
+
+    # entry for same flags and line, but any subtest
+    res = manifest.get((test_name, flags, WILDCARD_SUBTEST, line_num), None)
+    if res:
+        return res
+
+    # entry for same flags, but any subtest and any line
+    res = manifest.get((test_name, flags, WILDCARD_SUBTEST, WILDCARD_LINE), None)
+    if res:
+        return res
+
+    # any flags, but same subtest and line
+    res = manifest.get((test_name, WILDCARD_FLAGS, subtest, line_num), None)
+    if res:
+        return res
+
+    # any flags and any line number, but same subtest
+    res = manifest.get((test_name, WILDCARD_FLAGS, subtest, WILDCARD_LINE), None)
+    if res:
+        return res
+
+    # any flags and any subtest, but same line
+    res = manifest.get((test_name, WILDCARD_FLAGS, WILDCARD_SUBTEST, line_num), None)
+    if res:
+        return res
+
+    # any flags subtest and line
+    res = manifest.get((test_name, WILDCARD_FLAGS, WILDCARD_SUBTEST, WILDCARD_LINE), None)
+    if res:
+        return res
+
+#    # check for entries for this specific test
+#    if test_name != WILDCARD_NAME and flags != WILDCARD_FLAGS and 
+#        res = manifest.get((test_name, flags), None)
+#        if res:
+#            return res
+#
+#    # Test with wildcard line number
+#    if 
+#
+#    # Test name with wildcard flags
+#    if test_name != WILDCARD_NAME:
+#        res = manifest.get((test_name, WILDCARD_FLAGS), None)
+#        if res:
+#            return res
+#
+#    # Wildcard name with flags
+#    if flags != WILDCARD_FLAGS:
+#        res = manifest.get((WILDCARD_NAME, flags), None)
+#        if res:
+#            return res
+
+    # Test is not present in the manifest
+    return ABSENT
+
+
+def main():
+    if len(sys.argv) < 2:
+        print >> sys.stderr, "error: No override manifest provided"
+        print "ERROR"
+        exit(-1)
+
+    # read in the manifest file
+    manifest_filename = sys.argv[1]
+    manifest = {}
+
+    res = read_manifest(manifest_filename, manifest)
+    if res == False:
+        print >> sys.stderr, "error: Could not read override manifest (", manifest_filename, ")"
+        print "ERROR"
+        exit(-1)
+
+    # Ready to respond to queries
+    print "READY"
+
+    # Continually read queries from standard input
+    while True:
+        line = sys.stdin.readline()
+        
+        # finish when given an empty line
+        if not line:
+            break
+
+        # handle the query
+        res = query_manifest(line, manifest)
+        if not res:
+            print >> sys.stderr, "warning: Failed when querying manifest (query: ", args, ")"
+            res = ABSENT
+        print res
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+def parse_test_name(line):
+    line = line.lstrip()
+    
+    # empty or wildcard
+    if not line:
+        return WILDCARD_NAME, line
+    elif line[0] == '*':
+        return WILDCARD_NAME, line[1:]
+
+    # take everything up to first flag or next wildcard (begins with hypen)
+    # TODO: needs better handling
+    line = line.split(' *', 1)
+    if len(line) == 1:
+        line = line[0].split(' -', 1)
+        if len(line) != 1:
+            line[1] = '-' + line[1]
+    else:
+        line[1] = '*' + line[1]
+        
+    test_name = line[0].rstrip()
+    if len(line) == 1:
+        return test_name, ''
+    else:
+        return test_name, line[1]
+
+
+def parse_flags(line):
+    line = line.lstrip()
+
+    # empty line or wildcard
+    if not line:
+        return WILDCARD_FLAGS, line
+    elif line[0] == '*':
+        return WILDCARD_FLAGS, line[1:]
+
+    flags = []
+    while True:
+        line = line.lstrip()
+
+        if line:
+            # split flags on whitespace
+            line = line.split(None, 1)
+
+            flags.append(line[0])
+            if len(line) == 1:
+                line = ''
+            else:
+                line = line[1]
+        else:
+            break
+
+    if flags:
+        return tuple(flags), line
+    else:
+        return WILDCARD_FLAGS, line
+
 
