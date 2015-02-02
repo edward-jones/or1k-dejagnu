@@ -53,13 +53,6 @@ def read_manifest(filename, manifest):
             success = False
             continue
 
-        line = line.lstrip()
-        if line:
-            line = line.rstrip()
-            print >> sys.stderr, "warning: Unknown string at end of manifest entry (string: ", orig_line, ")"
-            success = False
-            continue 
-
         # add the entry to the manifest
         manifest[(test_name, flags, subtest, line_num)] = result
 
@@ -106,45 +99,19 @@ def parse_field(line, default):
 
     # capture field
     if not line[0] == '[':
-        print >> sys.stderr, 'warning: Missing start of field \'[\''
-        return None, line
+        # missing field, use default
+        return default, line
     else:
         line = line[1:]
 
-    field = ''
-    pos = 0
-    nesting = 1
-    in_string = False
-    while nesting > 0:
-        # exit if we run out of line prematurely
-        if pos >= len(line):
-            field = None
-            break
-
-        # handle nested brackets if they're not escaped
-        if (pos > 0 and line[pos - 1] != '\\') or (pos == 0):
-            if line[pos] == '[':
-                nesting = nesting + 1
-            elif line[pos] == ']':
-                nesting = nesting - 1
-        
-        # ignore the final closing brace
-        if nesting > 0:
-            field = field + line[pos]
-        pos = pos + 1
-    line = line[pos:]
-
-    if field is None:
+    # grab up to the next closing brace
+    line = line.split(']', 1)
+    if len(line) == 1:
         print >> sys.stderr, 'warning: Missing end of field \']\''
         return None, line
 
-    #line = line.split(']', 1)
-    #if len(line) == 1:
-    #    print >> sys.stderr, 'warning: Missing end of field \']\''
-    #    return None, line[0]
-    #
-    #field = line[0]
-    #line  = line[1]
+    field = line[0]
+    line  = line[1]
 
     # Replace runs of whitespace with a single space, and strip leading and
     # trailing whitespace
@@ -213,27 +180,6 @@ def query_manifest(line, manifest):
     res = manifest.get((test_name, WILDCARD_FLAGS, WILDCARD_SUBTEST, WILDCARD_LINE), None)
     if res:
         return res
-
-#    # check for entries for this specific test
-#    if test_name != WILDCARD_NAME and flags != WILDCARD_FLAGS and 
-#        res = manifest.get((test_name, flags), None)
-#        if res:
-#            return res
-#
-#    # Test with wildcard line number
-#    if 
-#
-#    # Test name with wildcard flags
-#    if test_name != WILDCARD_NAME:
-#        res = manifest.get((test_name, WILDCARD_FLAGS), None)
-#        if res:
-#            return res
-#
-#    # Wildcard name with flags
-#    if flags != WILDCARD_FLAGS:
-#        res = manifest.get((WILDCARD_NAME, flags), None)
-#        if res:
-#            return res
 
     # Test is not present in the manifest
     return ABSENT
