@@ -92,7 +92,9 @@ proc handle_override { log_str testcase flags subtest line_num } {
     switch $test_override {
 	"PASS" {
 	    override_log "$log_str now expected to pass"
-	    unset compiler_conditional_xfail_data
+	    if {[info exists $compiler_conditional_xfail_data]} {
+		unset compiler_conditional_xfail_data
+	    }
 	    clear_xfail "*-*-*"
 	}
 	"XFAIL" {
